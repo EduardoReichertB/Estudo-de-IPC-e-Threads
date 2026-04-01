@@ -76,7 +76,7 @@ void aplicar_negativo(void* arg){
   Task* temp_task = (Task*)arg;
   int i = temp_task->row_start;
 
-  printf("Thread processando linhas %d até %d\n", temp_task->row_start, temp_task->row_end);
+  printf("Processando linhas %d até %d\n", temp_task->row_start, temp_task->row_end);
 
   for(i; i < temp_task->row_end; i++){
     for(int j = 0; j < g_imagem.w; j++){
