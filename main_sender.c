@@ -9,7 +9,7 @@ int main(int argc, char* argv[]){
   mkfifo(path, 0666); //cria a named pipe
 
   //lê e salva a imagem na struct PGM, em imagem.data
-  read_PGM("fisica.pgm", &imagem);
+  read_PGM("fujiBRUTAL.pgm", &imagem);
 
   //prepara o header para enviar para o worker
   cabecalho.w = imagem.w;
@@ -35,7 +35,7 @@ int main(int argc, char* argv[]){
     tamanho_enviado += n;
   }
 
-  printf("Dados enviados.");
+  printf("Dados enviados.\n");
 
   close(fd);
   free(imagem.data);
