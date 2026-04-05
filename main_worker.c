@@ -1,104 +1,83 @@
-#include "trabalhOS.h"
+#pragma once
 
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <semaphore.h>
 
-// Dados compartilhados para processamento
-PGM g_imagem;
-int g_mode; // MODE_NEG ou MODE_SLICE
-int g_t1, g_t2;
+#define FIFO_PATH "/tmp/imgpipe"
+#define NEGATIVO 0
+#define SLICE 1
 
-void aplicar_negativo(void* arg);
-void aplicar_negativo_sem_thread(Task* tarefa, PGM* imagem);
+typedef struct PGM{
+  int w, h, maxv;      //maxv = 255
+  unsigned char* data; //w*h bytes
+}PGM;
 
-int main(int argc, char* argv[]){
-  Header cabecalho;
+typedef struct Header{
+  int w, h, maxv; //metadados da imagem
+  int mode;       //0 = NEGATIVO ; 1 = SLICE
+  int t1, t2;     //valido se modo = SLICE
+}Header;
 
-  //abre a fifo
-  const char* path = FIFO_PATH;
-  mkfifo(path, 0666); //cria a named pipe
+typedef struct Task{
+  int row_start; //linha inicial
+  int row_end;   //linha final
+}Task;
 
-  //recebe os dados enviados pelo sender
-  int fd;
-  fd = open(path, O_RDONLY);
-  printf("Recebendo dados...\n");
-
-  read(fd, &cabecalho, sizeof(Header));
-  printf("Cabecalho recebido.\n");
-  g_imagem.w = cabecalho.w;
-  g_imagem.h = cabecalho.h;
-  g_imagem.maxv = cabecalho.maxv;
-  printf("altura: %d\n largura: %d\n maxv: %d\n", g_imagem.h, g_imagem.w, g_imagem.maxv);
-
-  g_imagem.data = (unsigned char*)malloc(g_imagem.w * g_imagem.h * sizeof(unsigned char));
-  size_t tamanho_esperado = g_imagem.w * g_imagem.h;
-  printf("Imagem enviada: %ld bytes\n", tamanho_esperado);
-  size_t tamanho_lido = 0;
-  while(tamanho_lido < tamanho_esperado){
-    size_t n = read(fd, g_imagem.data + tamanho_lido, tamanho_esperado - tamanho_lido);
-    tamanho_lido += n;
+int read_PGM(const char* path, PGM* img){
+  FILE* file = fopen(path, "rb");
+  if(!file){
+    perror("Erro ao abrir o arquivo.");
+    return -1;
   }
-  printf("Imagem recebida: %ld bytes\n", tamanho_lido);
 
-  close(fd); //terminamos de receber as informações
-
-  pthread_t thread[4]; //dividir as tarefas em 4 threads
-  Task tarefa[4];
-
-  //divide as 874 linhas da imagem entre as tarefas - DEPOIS CRIAR UMA FUNÇÃO QUE FAÇA AUTOMATICO COM BASE NO TAMANHO DA IMAGEM ENVIADA
-  tarefa[0].row_start = 0;
-  tarefa[0].row_end = 100;   //218
-  tarefa[1].row_start = 100; //218
-  tarefa[1].row_end = 200;   //437
-  tarefa[2].row_start = 200; //437
-  tarefa[2].row_end = 300;   //656
-  tarefa[3].row_start = 300; //656
-  tarefa[3].row_end = 400;   //874
-
-  for(int i = 0; i < 4; i++){
-    pthread_create(&thread[i], NULL, (void *)aplicar_negativo, &tarefa[i]);
-    //aplicar_negativo_sem_thread(&tarefa[i], &g_imagem);
+  char magic[4]; //DEVE ACHAR "P5" NA PRIMEIRA LINHA SEMPRE
+  /*Aqui o numero mágico é P5 que está na primeira fila mas a linha é P5\n ai precisamos deixar espaço para 3 +1
+  o +1 é por que o fgets coloca '\0' no final do vetor, entao são 3 espaços para P5\n +1 para o \0
+  por isso fica magic[4] */
+  if(!fgets(magic, sizeof(magic), file)){
+    printf("Arquivo vazio.\n");
+    fclose(file);
+    return -1;
+  }else{
+    if(magic[0] != 'P' || magic[1] != '5'){ //verifica se tem o P5 na primeira linha
+      printf("Não é um arquivo PGM.");
+      fclose(file);
+      return -1;
+    }
   }
-  pthread_join(thread[0], NULL);
-  pthread_join(thread[1], NULL);
-  pthread_join(thread[2], NULL);
-  pthread_join(thread[3], NULL);
 
-  pthread_mutex_destroy(&mutex);
+  //retira os comentários
+  int ch;
+  while((ch = fgetc(file)) == '#'){
+    while(fgetc(file) != '\n');
+  }
+  ungetc(ch, file);
 
-  write_PGM("saida.pgm", &g_imagem);
+  fscanf(file, "%d %d %d", &img->w, &img->h, &img->maxv);
 
-  free(g_imagem.data);
+  fgetc(file);
 
+  //Aloca memoria para o data e então lê a imagem
+  img->data = (unsigned char*)malloc(img->w * img->h * sizeof(unsigned char));
+  fread(img->data, 1, img->w * img->h, file);
+
+  fclose(file);
   return 0;
 }
 
-void aplicar_negativo(void* arg){
-  Task* temp_task = (Task*)arg;
-  int i = temp_task->row_start;
+int write_PGM(const char* path, const PGM* img){
+  FILE* file = fopen(path, "wb");
+  fprintf(file, "P5\n%d %d\n %d\n", img->w, img->h, img->maxv);
 
-  printf("Processando linhas %d até %d\n", temp_task->row_start, temp_task->row_end);
+  fwrite(img->data, 1, img->w * img->h, file);
 
-  for(i; i < temp_task->row_end; i++){
-    for(int j = 0; j < g_imagem.w; j++){
-      int pos = i * g_imagem.w + j;
-      pthread_mutex_lock(&mutex);
-      g_imagem.data[pos] = 255 - g_imagem.data[pos];
-      pthread_mutex_unlock(&mutex);
-    }
-  }
+  fclose(file);
+  return 0;
 }
-
-void aplicar_negativo_sem_thread(Task* tarefa, PGM* imagem){
-  int i = tarefa->row_start;
-
-  printf("Thread processando linhas %d até %d\n", tarefa->row_start, tarefa->row_end);
-
-  for(i; i < tarefa->row_end; i++){
-    for(int j = 0; j < g_imagem.w; j++){
-      int pos = i * g_imagem.w + j;
-      imagem->data[pos] = 255 - imagem->data[pos];
-    }
-  }
-}
-
-
